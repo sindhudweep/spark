@@ -17,10 +17,12 @@
 
 package org.apache.spark.ml.clustering
 
+import java.io.File
+
 import org.apache.hadoop.fs.Path
 
 import org.apache.spark.ml.linalg.{Vector, Vectors}
-import org.apache.spark.ml.util.{DefaultReadWriteTest, MLTest, MLTestingUtils}
+import org.apache.spark.ml.util.{DefaultReadWriteTest, Identifiable, MLTest, MLTestingUtils}
 import org.apache.spark.ml.util.TestingUtils._
 import org.apache.spark.sql._
 
@@ -53,6 +55,15 @@ object LDASuite {
     "subsamplingRate" -> 0.051,
     "docConcentration" -> Array(2.0)
   )
+
+  private def generateInitModel(
+      k: Int,
+      dataset: Dataset[_],
+      initModelPath: String): LocalLDAModel = {
+    val initModel = new LDA().setK(k).setSeed(1).setOptimizer("online").setMaxIter(2).fit(dataset)
+    initModel.save(initModelPath)
+    initModel.asInstanceOf[LocalLDAModel]
+  }
 }
 
 
@@ -63,10 +74,18 @@ class LDASuite extends MLTest with DefaultReadWriteTest {
   val k: Int = 5
   val vocabSize: Int = 30
   @transient var dataset: DataFrame = _
+  @transient var initModel: LocalLDAModel = _
+  @transient var initModelPath: String = _
 
   override def beforeAll(): Unit = {
     super.beforeAll()
     dataset = LDASuite.generateLDAData(spark, 50, k, vocabSize)
+    initModelPath = getTempPath
+    initModel = LDASuite.generateInitModel(k, dataset, initModelPath)
+  }
+
+  private def getTempPath: String = {
+    new File(tempDir, Identifiable.randomUID("lda")).getPath
   }
 
   test("default parameters") {
@@ -79,6 +98,7 @@ class LDASuite extends MLTest with DefaultReadWriteTest {
     assert(lda.getK === 10)
     assert(!lda.isSet(lda.docConcentration))
     assert(!lda.isSet(lda.topicConcentration))
+    assert(!lda.isSet(lda.initialModel))
     assert(lda.getOptimizer === "online")
     assert(lda.getLearningDecay === 0.51)
     assert(lda.getLearningOffset === 1024)
@@ -119,6 +139,9 @@ class LDASuite extends MLTest with DefaultReadWriteTest {
     assert(lda.getSubsamplingRate === 0.06)
     lda.setOptimizeDocConcentration(false)
     assert(!lda.getOptimizeDocConcentration)
+
+    lda.setInitialModel(initModelPath)
+    assert(lda.getInitialModel === initModelPath)
   }
 
   test("parameters validation") {
@@ -166,6 +189,9 @@ class LDASuite extends MLTest with DefaultReadWriteTest {
     intercept[IllegalArgumentException] {
       new LDA().setSubsamplingRate(1.1)
     }
+    intercept[IllegalArgumentException] {
+      new LDA().setOptimizer("em").setInitialModel(initModelPath).transformSchema(dummyDF.schema)
+    }
   }
 
   test("fit & transform with Online LDA") {
@@ -204,6 +230,53 @@ class LDASuite extends MLTest with DefaultReadWriteTest {
     }
     topics.select("termWeights").collect().foreach { case r: Row =>
       val termWeights = r.getSeq[Double](0)
+      assert(termWeights.length === 3 && termWeights.forall(w => w >= 0.0 && w <= 1.0))
+    }
+  }
+
+  test("fit & transform with Online LDA with initial model") {
+    val lda = new LDA().setK(k).setSeed(1).setOptimizer("online").setMaxIter(2)
+    lda.setInitialModel(initModelPath)
+    val model = lda.fit(dataset)
+
+    MLTestingUtils.checkCopyAndUids(lda, model)
+
+    assert(model.isInstanceOf[LocalLDAModel])
+    assert(model.vocabSize === vocabSize)
+    assert(model.estimatedDocConcentration.size === k)
+    assert(model.topicsMatrix.numRows === vocabSize)
+    assert(model.topicsMatrix.numCols === k)
+    assert(!model.isDistributed)
+    assert(model.getInitialModel === initModelPath)
+
+    // transform()
+    val transformed = model.transform(dataset)
+    val expectedColumns = Array("features", lda.getTopicDistributionCol)
+    expectedColumns.foreach { column =>
+      assert(transformed.columns.contains(column))
+    }
+    transformed.select(lda.getTopicDistributionCol).collect().foreach { r =>
+      val topicDistribution = r.getAs[Vector](0)
+      assert(topicDistribution.size === k)
+      assert(topicDistribution.toArray.forall(w => w >= 0.0 && w <= 1.0))
+    }
+
+    // logLikelihood, logPerplexity
+    val ll = model.logLikelihood(dataset)
+    assert(ll <= 0.0 && ll != Double.NegativeInfinity)
+    val lp = model.logPerplexity(dataset)
+    assert(lp >= 0.0 && lp != Double.PositiveInfinity)
+
+    // describeTopics
+    val topics = model.describeTopics(3)
+    assert(topics.count() === k)
+    assert(topics.select("topic").rdd.map(_.getInt(0)).collect().toSet === Range(0, k).toSet)
+    topics.select("termIndices").collect().foreach { case r: Row =>
+      val termIndices = r.getAs[Seq[Int]](0)
+      assert(termIndices.length === 3 && termIndices.toSet.size === 3)
+    }
+    topics.select("termWeights").collect().foreach { case r: Row =>
+      val termWeights = r.getAs[Seq[Double]](0)
       assert(termWeights.length === 3 && termWeights.forall(w => w >= 0.0 && w <= 1.0))
     }
   }

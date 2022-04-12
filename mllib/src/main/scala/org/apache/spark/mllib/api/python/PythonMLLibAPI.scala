@@ -526,7 +526,8 @@ private[python] class PythonMLLibAPI extends Serializable {
       topicConcentration: Double,
       seed: java.lang.Long,
       checkpointInterval: Int,
-      optimizer: String): LDAModelWrapper = {
+      optimizer: String,
+      initialModel: LDAModelWrapper): LDAModelWrapper = {
     val algo = new LDA()
       .setK(k)
       .setMaxIterations(maxIterations)
@@ -536,6 +537,13 @@ private[python] class PythonMLLibAPI extends Serializable {
       .setOptimizer(optimizer)
 
     if (seed != null) algo.setSeed(seed)
+
+    if (initialModel != null) {
+      if (optimizer != "online") {
+        throw new IllegalArgumentException("initialModel is only supported by online optimizer.")
+      }
+      algo.setInitialModel(initialModel.getModel)
+    }
 
     val documents = data.rdd.map(_.asScala.toArray).map { r =>
       r(0) match {

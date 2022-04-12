@@ -19,6 +19,8 @@ package org.apache.spark.ml.clustering
 
 import java.util.Locale
 
+import scala.util.{Try}
+
 import breeze.linalg.normalize
 import breeze.numerics.exp
 import org.apache.hadoop.fs.Path
@@ -183,6 +185,27 @@ private[clustering] trait LDAParams extends Params with HasFeaturesCol with HasM
   /** @group getParam */
   @Since("1.6.0")
   def getOptimizer: String = $(optimizer)
+
+
+  /**
+   * For Online optimizer only (currently): [[optimizer]] = "online".
+   * An initial model to be used as a starting point for the learning, instead of a random
+   * initialization. Provide the path to a serialized trained LDAModel.
+   *
+   * @group param
+   */
+  @Since("3.2.1")
+  final val initialModel = new Param[String](this, "initialModel", "Path to a serialized " +
+      "LDAModel to use as a starting point, instead of a random initilization. Only" +
+      "supported by online model.", (value: String) => validateInitialModel(value))
+
+  /** @group getParam */
+  @Since("3.2.1")
+  def getInitialModel : String = $(initialModel)
+
+  protected def validateInitialModel(value: String): Boolean = {
+    Try(LocalLDAModel.load(value)).isSuccess
+  }
 
   /**
    * Output column with estimates of the topic mixture distribution for each document (often called
@@ -351,6 +374,10 @@ private[clustering] trait LDAParams extends Params with HasFeaturesCol with HasM
           require(getTopicConcentration >= 0, s"For EM optimizer, topicConcentration" +
             s" must be >= 1.  Found value: $getTopicConcentration")
       }
+    }
+    if (isSet(initialModel)) {
+      require(getOptimizer.toLowerCase(Locale.ROOT) == "online", "initialModel is currently " +
+          "supported only by Online LDA Optimizer")
     }
     SchemaUtils.validateVectorCompatibleColumn(schema, getFeaturesCol)
     SchemaUtils.appendColumn(schema, $(topicDistributionCol), new VectorUDT)
@@ -908,6 +935,10 @@ class LDA @Since("1.6.0") (
   def setOptimizer(value: String): this.type = set(optimizer, value)
 
   /** @group setParam */
+  @Since("3.2.1")
+  def setInitialModel(value: String): this.type = set(initialModel, value)
+
+  /** @group setParam */
   @Since("1.6.0")
   def setTopicDistributionCol(value: String): this.type = set(topicDistributionCol, value)
 
@@ -942,7 +973,7 @@ class LDA @Since("1.6.0") (
     instr.logDataset(dataset)
     instr.logParams(this, featuresCol, topicDistributionCol, k, maxIter, subsamplingRate,
       checkpointInterval, keepLastCheckpoint, optimizeDocConcentration, topicConcentration,
-      learningDecay, optimizer, learningOffset, seed)
+      learningDecay, optimizer, learningOffset, seed, initialModel)
 
     val oldData = LDA.getOldDataset(dataset, $(featuresCol))
 
@@ -964,6 +995,11 @@ class LDA @Since("1.6.0") (
       .setSeed($(seed))
       .setCheckpointInterval($(checkpointInterval))
       .setOptimizer(getOldOptimizer)
+
+    if (isSet(initialModel)) {
+      val init = LocalLDAModel.load($(initialModel))
+      oldLDA.setInitialModel(init.oldLocalModel)
+    }
 
     val oldModel = oldLDA.run(oldData)
     val newModel = oldModel match {

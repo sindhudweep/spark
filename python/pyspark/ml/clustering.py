@@ -1076,13 +1076,18 @@ class _LDAParams(HasMaxIter, HasFeaturesCol, HasSeed, HasCheckpointInterval):
                                " deleted. Deleting the checkpoint can cause failures if a data"
                                " partition is lost, so set this bit with care.",
                                TypeConverters.toBoolean)
+    initialModel = Param(Params._dummy(), "initialModel",
+                         "Path to a serialized LDAModel to use as a starting point, "
+                         "instead of a random initilization. Only supported by online model.",
+                         typeConverter=TypeConverters.toString)
 
     def __init__(self, *args):
         super(_LDAParams, self).__init__(*args)
         self._setDefault(maxIter=20, checkpointInterval=10,
                          k=10, optimizer="online", learningOffset=1024.0, learningDecay=0.51,
                          subsamplingRate=0.05, optimizeDocConcentration=True,
-                         topicDistributionCol="topicDistribution", keepLastCheckpoint=True)
+                         topicDistributionCol="topicDistribution", keepLastCheckpoint=True,
+                         initialModel=None)
 
     @since("2.0.0")
     def getK(self):
@@ -1153,6 +1158,13 @@ class _LDAParams(HasMaxIter, HasFeaturesCol, HasSeed, HasCheckpointInterval):
         Gets the value of :py:attr:`keepLastCheckpoint` or its default value.
         """
         return self.getOrDefault(self.keepLastCheckpoint)
+    
+    @since("3.2.1")
+    def getInitialModel(self):
+        """
+        Gets the value of :py:attr:`initialModel` or its default value.
+        """
+        return self.getOrDefault(self.initialModel)
 
 
 @inherit_doc
@@ -1415,13 +1427,15 @@ class LDA(JavaEstimator, _LDAParams, JavaMLReadable, JavaMLWritable):
                  k=10, optimizer="online", learningOffset=1024.0, learningDecay=0.51,
                  subsamplingRate=0.05, optimizeDocConcentration=True,
                  docConcentration=None, topicConcentration=None,
-                 topicDistributionCol="topicDistribution", keepLastCheckpoint=True):
+                 topicDistributionCol="topicDistribution", keepLastCheckpoint=True,
+                 initialModel=None):
         """
         __init__(self, \\*, featuresCol="features", maxIter=20, seed=None, checkpointInterval=10,\
                   k=10, optimizer="online", learningOffset=1024.0, learningDecay=0.51,\
                   subsamplingRate=0.05, optimizeDocConcentration=True,\
                   docConcentration=None, topicConcentration=None,\
-                  topicDistributionCol="topicDistribution", keepLastCheckpoint=True)
+                  topicDistributionCol="topicDistribution", keepLastCheckpoint=True,
+                  initialModel=None):
         """
         super(LDA, self).__init__()
         self._java_obj = self._new_java_obj("org.apache.spark.ml.clustering.LDA", self.uid)
@@ -1440,13 +1454,15 @@ class LDA(JavaEstimator, _LDAParams, JavaMLReadable, JavaMLWritable):
                   k=10, optimizer="online", learningOffset=1024.0, learningDecay=0.51,
                   subsamplingRate=0.05, optimizeDocConcentration=True,
                   docConcentration=None, topicConcentration=None,
-                  topicDistributionCol="topicDistribution", keepLastCheckpoint=True):
+                  topicDistributionCol="topicDistribution", keepLastCheckpoint=True,
+                  initialModel=None):
         """
         setParams(self, \\*, featuresCol="features", maxIter=20, seed=None, checkpointInterval=10,\
                   k=10, optimizer="online", learningOffset=1024.0, learningDecay=0.51,\
                   subsamplingRate=0.05, optimizeDocConcentration=True,\
                   docConcentration=None, topicConcentration=None,\
-                  topicDistributionCol="topicDistribution", keepLastCheckpoint=True)
+                  topicDistributionCol="topicDistribution", keepLastCheckpoint=True,
+                  initialModel=None):
 
         Sets params for LDA.
         """
@@ -1595,6 +1611,13 @@ class LDA(JavaEstimator, _LDAParams, JavaMLReadable, JavaMLWritable):
         False
         """
         return self._set(keepLastCheckpoint=value)
+
+    @since("3.2.1")
+    def setInitialModel(self, value):
+        """
+        Sets the value of :py:attr:`initialModel`.
+        """
+        return self._set(initialModel=value)
 
     @since("2.0.0")
     def setMaxIter(self, value):

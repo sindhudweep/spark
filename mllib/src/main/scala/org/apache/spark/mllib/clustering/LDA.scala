@@ -52,7 +52,8 @@ class LDA private (
     private var topicConcentration: Double,
     private var seed: Long,
     private var checkpointInterval: Int,
-    private var ldaOptimizer: LDAOptimizer) extends Logging {
+    private var ldaOptimizer: LDAOptimizer,
+    private var initialModel: Option[LDAModel]) extends Logging {
 
   /**
    * Constructs a LDA instance with default parameters.
@@ -60,7 +61,7 @@ class LDA private (
   @Since("1.3.0")
   def this() = this(k = 10, maxIterations = 20, docConcentration = Vectors.dense(-1),
     topicConcentration = -1, seed = Utils.random.nextLong(), checkpointInterval = 10,
-    ldaOptimizer = new EMLDAOptimizer)
+    ldaOptimizer = new EMLDAOptimizer, initialModel = None)
 
   /**
    * Number of topics to infer, i.e., the number of soft cluster centers.
@@ -294,6 +295,26 @@ class LDA private (
     this.ldaOptimizer = optimizer
     this
   }
+
+
+  /**
+   * Returns the initial model that has been provided, if any
+   */
+  @Since("3.2.1")
+  def getInitialModel: Option[LDAModel] = this.initialModel
+
+  /**
+   * Set the initial starting point, bypassing the random initialization.
+   * This can be used for incremental learning.
+   * This is supported only for online optimizer. Models must have the same parameters
+   * (k, vocabulary size, topic concentration)
+   */
+  @Since("3.2.1")
+  def setInitialModel(model: LDAModel): this.type = {
+    initialModel = Some(model)
+    this
+  }
+
 
   /**
    * Set the LDAOptimizer used to perform the actual calculation by algorithm name.

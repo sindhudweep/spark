@@ -214,6 +214,98 @@ class LDASuite extends SparkFunSuite with MLlibTestSparkContext {
     assert(op.getTau0 === 567)
   }
 
+    test("OnlineLDAOptimizer initialization with a previous model") {
+    val alpha = Vectors.dense(Array.fill(tinyK)(0.01))
+    val existingModel = new LocalLDAModel(tinyTopics, alpha, 1D, 100D)
+
+    val lda = new LDA()
+        .setOptimizer("online")
+        .setK(tinyK)
+        .setDocConcentration(alpha)
+        .setTopicConcentration(1D)
+        .setInitialModel(existingModel)
+    val corpus = sc.parallelize(tinyCorpus, 2)
+    val op = new OnlineLDAOptimizer().initialize(corpus, lda)
+
+    val model2 = op.getLDAModel(Array())
+    assert(model2.k === tinyK)
+    assert(model2.vocabSize === existingModel.vocabSize)
+    assert(model2.docConcentration === existingModel.docConcentration)
+    assert(model2.topicConcentration === existingModel.topicConcentration)
+    assert(model2.topicsMatrix === existingModel.topicsMatrix)
+  }
+
+  test("OnlineLDAOptimizer invalid initialization with an incompatible previous model") {
+    val alpha = Vectors.dense(Array.fill(tinyK)(0.01))
+    val existingModel = new LocalLDAModel(tinyTopics, alpha, 1D, 100D)
+
+    val corpus = sc.parallelize(tinyCorpus, 2)
+
+    // check incompatible K
+    intercept[IllegalArgumentException]{
+      val lda = new LDA()
+          .setOptimizer("online")
+          .setK(4)
+          .setDocConcentration(4)
+          .setTopicConcentration(1D)
+          .setInitialModel(existingModel)
+      val op = new OnlineLDAOptimizer().initialize(corpus, lda)
+    }
+
+    // check incompatible topic concentration
+    intercept[IllegalArgumentException] {
+      val lda = new LDA()
+          .setOptimizer("online")
+          .setK(tinyK)
+          .setDocConcentration(alpha)
+          .setTopicConcentration(2D)
+          .setInitialModel(existingModel)
+      val op = new OnlineLDAOptimizer().initialize(corpus, lda)
+    }
+
+    // check incompatible model type
+    intercept[IllegalArgumentException] {
+      val lda = new LDA()
+          .setOptimizer("online")
+          .setK(tinyK)
+          .setDocConcentration(alpha)
+          .setTopicConcentration(1D)
+          .setInitialModel(
+            new DistributedLDAModel(null, null, tinyK, tinyVocabSize, null, 1D, null))
+      val op = new OnlineLDAOptimizer().initialize(corpus, lda)
+    }
+
+    // check incompatible gamma shape
+    intercept[IllegalArgumentException] {
+      val lda = new LDA()
+          .setOptimizer("online")
+          .setK(tinyK)
+          .setDocConcentration(alpha)
+          .setTopicConcentration(1D)
+          .setInitialModel(existingModel)
+      val op = new OnlineLDAOptimizer()
+          .setGammaShape(200D)
+          .initialize(corpus, lda)
+    }
+  }
+
+  test("DistributedModel invalid creation with a previous model") {
+    val alpha = Vectors.dense(Array.fill(tinyK)(0.01))
+    val existingModel = new LocalLDAModel(tinyTopics, alpha, 1D, 100D)
+
+    val corpus = sc.parallelize(tinyCorpus, 2)
+
+    intercept[IllegalArgumentException] {
+      val lda = new LDA()
+          .setOptimizer("em")
+          .setK(tinyK)
+          .setDocConcentration(alpha)
+          .setTopicConcentration(1D)
+          .setInitialModel(existingModel)
+      val op = new EMLDAOptimizer().initialize(corpus, lda)
+    }
+  }
+
   test("OnlineLDAOptimizer one iteration") {
     // run OnlineLDAOptimizer for 1 iteration to verify it's consistency with Blei-lab,
     // [[https://github.com/Blei-Lab/onlineldavb]]
@@ -269,6 +361,45 @@ class LDASuite extends SparkFunSuite with MLlibTestSparkContext {
     }
 
     // check distribution for each topic, typical distribution is (0.3, 0.3, 0.3, 0.02, 0.02, 0.02)
+    topics.foreach { topic =>
+      val smalls = topic.filter(t => t._2 < 0.1).map(_._2)
+      assert(smalls.length == 3 && smalls.sum < 0.2)
+    }
+  }
+
+  test("OnlineLDAOptimizer with toy data, and with incremental learning") {
+    val docs = sc.parallelize(toyData.take(3))
+    val op = new OnlineLDAOptimizer().setMiniBatchFraction(1).setTau0(1024).setKappa(0.51)
+        .setGammaShape(1e10)
+    val lda = new LDA().setK(2)
+        .setDocConcentration(0.01)
+        .setTopicConcentration(0.01)
+        .setMaxIterations(100)
+        .setOptimizer(op)
+        .setSeed(12345)
+
+    val ldaModel = lda.run(docs)
+
+
+    val docs2 = sc.parallelize(toyData.takeRight(3))
+    val lda2 = new LDA().setK(2)
+        .setDocConcentration(0.01)
+        .setTopicConcentration(0.01)
+        .setMaxIterations(100)
+        .setOptimizer(op)
+        .setInitialModel(ldaModel)
+        .setSeed(12345)
+
+    val ldaModel2 = lda2.run(docs2)
+
+    val topicIndices = ldaModel2.describeTopics(maxTermsPerTopic = 10)
+    val topics = topicIndices.map { case (terms, termWeights) =>
+      terms.zip(termWeights)
+    }
+
+    // check distribution for each topic,
+    // should be close to values got with learning on the full corpus
+    // typical distribution is (0.3, 0.3, 0.3, 0.02, 0.02, 0.02)
     topics.foreach { topic =>
       val smalls = topic.filter(t => t._2 < 0.1).map(_._2)
       assert(smalls.length == 3 && smalls.sum < 0.2)
@@ -579,7 +710,7 @@ private[clustering] object LDASuite {
     values = tinyTopicsAsArray.fold(Array.empty[Double])(_ ++ _))
   def tinyTopicDescription: Array[(Array[Int], Array[Double])] = tinyTopicsAsArray.map { topic =>
     val (termWeights, terms) = topic.zipWithIndex.sortBy(-_._1).unzip
-    (terms.toArray, termWeights.toArray)
+    (terms, termWeights.toArray)
   }
 
   def tinyCorpus: Array[(Long, Vector)] = Array(
