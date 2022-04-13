@@ -428,7 +428,7 @@ final class OnlineLDAOptimizer extends LDAOptimizer with Logging {
         require(initModel.topicConcentration == this.eta,
           "Mismatched topic concentration with provided initial model")
         require(initModel.gammaShape == this.gammaShape,
-          "Mismatched gamma shape with provided initial model")
+          s"Mismatched gamma shape with provided initial model. Expected ${this.gammaShape} got ${initModel.gammaShape}")
         // get alpha from previously trained model
         this.alpha = initModel.docConcentration
         // Initialize the variational distribution from the initial model
@@ -607,7 +607,7 @@ final class OnlineLDAOptimizer extends LDAOptimizer with Logging {
   }
 
   override private[clustering] def getLDAModel(iterationTimes: Array[Double]): LDAModel = {
-    new LocalLDAModel(Matrices.fromBreeze(lambda).transpose, alpha, eta)
+    new LocalLDAModel(Matrices.fromBreeze(lambda).transpose, alpha, eta, gammaShape)
       .setSeed(randomGenerator.nextLong())
   }
 
